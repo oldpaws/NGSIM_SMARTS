@@ -199,4 +199,4 @@ class PSGAIL():
         self.value_optimizer.step()
 
         self.soft_update(self.value, self.target_value, self._tau)
-        return np.array(discriminator_loss), np.array(policy_loss), np.array(value_loss)
+        return float(discriminator_loss.data), float(policy_loss.data), float(value_loss.data)
