@@ -62,8 +62,8 @@ class NetBN(torch.nn.Module):
 class PSGAIL():
     def __init__(self,
                  discriminator_lr=1e-5,
-                 policy_lr=1e-3,
-                 value_lr=5e-4,
+                 policy_lr=1e-2,
+                 value_lr=5e-3,
                  hidden_size=128,
                  state_action_space=38,
                  state_space=36,
@@ -74,10 +74,10 @@ class PSGAIL():
         self._clip_range = 0.2
         self.lambda_gp = 2
         self.discriminator = Net(64, state_action_space, output_size=1)
-        self.value = NetBN(hidden_size, state_space, output_size=1, layer_num=3)
-        self.target_value = NetBN(hidden_size, state_space, output_size=1, layer_num=3)
+        self.value = NetBN(hidden_size, state_space, output_size=1, layer_num=4)
+        self.target_value = NetBN(hidden_size, state_space, output_size=1, layer_num=4)
         # self.target_policy = NetBN(hidden_size, state_space, output_size=gru_hidden, layer_num=3)
-        self.policy = NetBN(hidden_size, state_space, output_size=gru_hidden, layer_num=3)
+        self.policy = NetBN(hidden_size, state_space, output_size=gru_hidden, layer_num=4)
         # self.policy =self.soft_update(self.target_policy, self.policy, 1)
         # self.policy = GRUNet(state_space, gru_hidden, gru_nums)
         self.discriminator_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=discriminator_lr,
@@ -90,35 +90,11 @@ class PSGAIL():
     def get_r(self, obs_action):
         return self.discriminator(obs_action)
 
-    # def get_action(self, obs, hidden=None, action=None):
-    #     policy_out, self.last_hidden = self.policy(obs, hidden)
-    #     mean1, var1, mean2, var2 = torch.chunk(policy_out, 4, dim=-1)
-    #     mean1 = 2 * torch.tanh(mean1)
-    #     var1 = torch.nn.functional.softplus(var1)
-    #     mean2 = 2 * torch.tanh(mean2)
-    #     var2 = torch.nn.functional.softplus(var2)
-    #     m1 = Normal(mean1, var1)
-    #     m2 = Normal(mean2, var2)
-    #     if action is None:
-    #         action1 = m1.sample()
-    #         action2 = m2.sample()
-    #         action1 = torch.clamp(action1, -2, 2)
-    #         action2 = torch.clamp(action2, -2, 2)
-    #         log_prob1 = m1.log_prob(action1)
-    #         log_prob2 = m2.log_prob(action2)
-    #         action = torch.concat((action1, action2), dim=1)
-    #     else:
-    #         log_prob1 = m1.log_prob(action[:, 0])
-    #         log_prob2 = m2.log_prob(action[:, 1])
-    #     log_prob = log_prob2 + log_prob1
-    #     prob = torch.exp(log_prob)
-    #     return log_prob.reshape(-1, 1), prob.reshape(-1, 1), action, self.last_hidden
-
     def get_action(self, obs, action=None):
         policy_out = self.policy(obs)
         mean, var = torch.chunk(policy_out, 2, dim=-1)
-        mean[0] = 3 * torch.tanh(mean[0])
-        mean[1] = 0.25 * torch.tanh(mean[1])
+        mean[:, 0] = 3 * torch.tanh(mean[:, 0])
+        mean[:, 1] = 0.25 * torch.tanh(mean[:, 1])
         var = torch.nn.functional.softplus(var)
         cov_mat = torch.diag_embed(var)
         act_dist = MultivariateNormal(mean, cov_mat)
@@ -164,51 +140,9 @@ class PSGAIL():
         s1 = batch["next_state"]
         done = batch["done"].reshape(-1, 1)
         with torch.no_grad():
-            td_target = reward + gamma * self.target_value(s1) * (1 - done)
-            adv = td_target - self.target_value(s)
+            td_target = reward + gamma * self.value(s1) * (1 - done)
+            adv = td_target - self.value(s)
         return adv, td_target
-
-    # def update_parameters(self, batch, sap_experts, gamma):
-    #     s = batch["state"]
-    #     a = batch["action"]
-    #     s1 = batch["next_state"]
-    #     done = batch["done"].reshape(-1, 1)
-    #     old_prob = batch["probs"].reshape(-1, 1)
-    #     adv = batch['adv'].reshape(-1, 1)
-    #
-    #     sap_experts = torch.tensor(sap_experts, device=device, dtype=torch.float32)
-    #     sap_agents = torch.cat((s, a), dim=1)
-    #     sap_agents = sap_agents.detach()
-    #     D_expert = self.discriminator(sap_experts)
-    #     D_agents = self.discriminator(sap_agents)
-    #     grad_penalty = self.grad_penalty(sap_agents.data, sap_experts.data)
-    #     discriminator_loss = D_agents.mean() - D_expert.mean() + grad_penalty
-    #     # discriminator_loss = D_agents.mean() - D_expert.mean()
-    #     self.discriminator_optimizer.zero_grad()
-    #     discriminator_loss.backward()
-    #     # discriminator_loss.backward()
-    #     self.discriminator_optimizer.step()
-    #
-    #     agents_rew = (D_agents - D_agents.mean()) / (D_agents.std() + 1e-8)
-    #     td_target = agents_rew.detach() + gamma * self.target_value(s1) * (1 - done)
-    #
-    #     log_prob, cur_prob, action = self.get_action(s, a)
-    #     old_prob = old_prob.detach()
-    #     ip_sp = cur_prob / (old_prob + 1e-7)
-    #     ip_sp_clip = torch.clamp(ip_sp, 1 - self._clip_range, 1 + self._clip_range)
-    #     policy_loss = -torch.mean(torch.min(ip_sp * adv.detach(), ip_sp_clip * adv.detach()))
-    #     self.policy_optimizer.zero_grad()
-    #     policy_loss.backward()
-    #     self.policy_optimizer.step()
-    #
-    #     value_loss = torch.mean(F.mse_loss(self.value(s), td_target.detach()))
-    #     self.value_optimizer.zero_grad()
-    #     value_loss.backward()
-    #     self.value_optimizer.step()
-    #
-    #     self.soft_update(self.value, self.target_value, self._tau)
-    #     return float(D_agents.mean().data), float(D_expert.mean().data), float(grad_penalty.data), float(
-    #         policy_loss.data), float(value_loss.data)
 
     def update_discriminator(self, batch, sap_experts):
         s = batch["state"]
@@ -229,15 +163,17 @@ class PSGAIL():
     def update_generator(self, batch, gamma):
         s = batch["state"]
         a = batch["action"]
-        # s1 = batch["next_state"]
-        # done = batch["done"].reshape(-1, 1)
+        s1 = batch["next_state"]
+        done = batch["done"].reshape(-1, 1)
         old_prob = batch["probs"].reshape(-1, 1)
 
         sap_agents = torch.cat((s, a), dim=1)
         D_agents = self.discriminator(sap_agents)
         agents_rew = (D_agents - D_agents.mean()) / (D_agents.std() + 1e-8)
         adv, td_target = self.compute_adv(batch, gamma, agents_rew.detach())
-        # td_target = agents_rew.detach() + gamma * self.target_value(s1) * (1 - done)
+
+        td_target = agents_rew.detach() + gamma * self.target_value(s1) * (1 - done)
+
         cur_prob, _, dist_entropy = self.get_action(s, a)
         old_prob = old_prob.detach()
         ip_sp = cur_prob / (old_prob + 1e-7)
@@ -253,3 +189,40 @@ class PSGAIL():
 
         self.soft_update(self.value, self.target_value, self._tau)
         return float(policy_loss.data), float(value_loss.data)
+
+    def ppo(self, batch, gamma):
+        s = batch["state"]
+        a = batch["action"]
+        old_prob = batch["probs"].reshape(-1, 1)
+        r = batch["reward"]
+        batch["reward"] = (r - r.mean()) / (r.std() + 1e-8)
+        r = batch["reward"].reshape(-1, 1)
+
+        adv, td_target = self.compute_adv(batch, gamma, r)
+        cur_prob, _, dist_entropy = self.get_action(s, a)
+        old_prob = old_prob.detach()
+        ip_sp = cur_prob / (old_prob + 1e-7)
+        ip_sp_clip = torch.clamp(ip_sp, 1 - self._clip_range, 1 + self._clip_range)
+        policy_loss = -torch.mean(torch.min(ip_sp * adv.detach(), ip_sp_clip * adv.detach()) + 0.01 * dist_entropy)
+        self.policy_optimizer.zero_grad()
+        policy_loss.backward()
+        self.policy_optimizer.step()
+        value_loss = torch.mean(F.mse_loss(self.value(s), td_target.detach()))
+        self.value_optimizer.zero_grad()
+        value_loss.backward()
+        self.value_optimizer.step()
+
+        self.soft_update(self.value, self.target_value, self._tau)
+        return float(policy_loss.data), float(value_loss.data)
+
+    def behavior_clone(self, sap_experts):
+        sap_experts = torch.tensor(sap_experts, device=device, dtype=torch.float32)
+        s_experts = sap_experts[:, :-2]
+        a_agents = self.get_action(s_experts)
+        a_experts = sap_experts[:, -2:]
+        policy_loss = torch.mean(F.mse_loss(a_agents, a_experts.detach()))
+        self.policy_optimizer.zero_grad()
+        policy_loss.backward()
+        self.policy_optimizer.step()
+        return float(policy_loss.data)
+

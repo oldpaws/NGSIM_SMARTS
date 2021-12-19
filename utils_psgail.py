@@ -6,6 +6,7 @@ from smarts.env.wrappers.parallel_env import ParallelEnv
 import random
 import matplotlib.pyplot as plt
 import time
+from collections import defaultdict
 
 # Increase system recursion limit
 sys.setrecursionlimit(25000)
@@ -65,7 +66,6 @@ class trajectory():
     def __init__(self):
         self.states = []
         self.actions = []
-        self.hiddens = []
         self.next_states = []
         self.rewards = []
         self.dones = []
@@ -76,7 +76,6 @@ class samples_agents():
     def __init__(self):
         self.states = []
         self.actions = []
-        self.hiddens = []
         self.next_states = []
         self.rewards = []
         self.dones = []
@@ -87,7 +86,6 @@ def dump_trajectory(expert_trajectory, agent_id, batch_samples):
     batch_samples.states += expert_trajectory[agent_id].states
     batch_samples.probs += expert_trajectory[agent_id].probs
     batch_samples.actions += expert_trajectory[agent_id].actions
-    batch_samples.hiddens += expert_trajectory[agent_id].hiddens
     batch_samples.next_states += expert_trajectory[agent_id].next_states
     batch_samples.rewards += expert_trajectory[agent_id].rewards
     batch_samples.dones += expert_trajectory[agent_id].dones
@@ -99,7 +97,6 @@ def dump_all(expert_trajectory, batch_samples):
             batch_samples.states += expert_trajectory[agent_id].states
             batch_samples.probs += expert_trajectory[agent_id].probs
             batch_samples.actions += expert_trajectory[agent_id].actions
-            batch_samples.hiddens += expert_trajectory[agent_id].hiddens
             batch_samples.next_states += expert_trajectory[agent_id].next_states
             batch_samples.rewards += expert_trajectory[agent_id].rewards
             batch_samples.dones += expert_trajectory[agent_id].dones
@@ -107,10 +104,10 @@ def dump_all(expert_trajectory, batch_samples):
 
 def trans2tensor(batch):
     for k in batch:
-        if k == 'action' or k == 'probs':
-            batch[k] = torch.cat(batch[k], dim=0).to(device1)
-        else:
-            batch[k] = torch.tensor(batch[k], device=device1, dtype=torch.float32)
+        # if k == 'action' or k == 'probs':
+        #     batch[k] = torch.cat(batch[k], dim=0).to(device1)
+        # else:
+        batch[k] = torch.tensor(batch[k], device=device1, dtype=torch.float32)
     return batch
 
 
@@ -128,28 +125,32 @@ def sampling(psgail, vector_env, batch_size):
     vector_env.seed(random.randint(1, 500))
     vec_obs = vector_env.reset()
     vec_done = []
-    states = []
-    actions = []
-    rewards = []
-    next_states = []
-    probs = []
-    dones = []
+
+    expert_trajectory = {}
+    batch_samples = samples_agents()
+    agents_buffer = {}
+    total_agent_num = 0
+    for i in range(12):
+        expert_trajectory[i] = {}
     counter = 0
     while True:
         vec_act = []
-        obs_vectors = np.zeros((1, 36))
+        obs_vectors_orig = np.zeros((1, 36))
         for idx, obs in enumerate(vec_obs):
             for agent_id in obs.keys():
-                if getlist(vec_done, idx) is not None and vec_done[idx].get(agent_id):
+                if agent_id not in expert_trajectory[idx]:
+                    expert_trajectory[idx][agent_id] = trajectory()
+                    total_agent_num += 1
+                elif getlist(vec_done, idx) is not None and vec_done[idx].get(agent_id):
+                    dump_trajectory(expert_trajectory[idx], agent_id, batch_samples)
+                    del expert_trajectory[idx][agent_id]
                     continue
-                obs_vectors = np.vstack((obs_vectors, obs_extractor(obs[agent_id])))
-                states.append(obs_vectors[-1, :])
-        obs_vectors = torch.tensor([obs_vectors[1:]], device=device1, dtype=torch.float32)
-        log_prob, prob, acts = psgail.get_action(obs_vectors.squeeze())
+                obs_vectors_orig = np.vstack((obs_vectors_orig, obs_extractor(obs[agent_id])))
+        obs_vectors = torch.tensor(obs_vectors_orig[1:, :], device=device1, dtype=torch.float32)
+        prob, acts, _ = psgail.get_action(obs_vectors)
         act_idx = 0
         prob = prob.to(device0)
         acts = acts.to(device0)
-        # time1 = time.time()
         for idx, obs in enumerate(vec_obs):
             act_n = {}
             for agent_id in obs.keys():
@@ -157,31 +158,91 @@ def sampling(psgail, vector_env, batch_size):
                     continue
                 act_tmp = acts[act_idx].cpu()
                 act_n[agent_id] = act_tmp.numpy()
+                expert_trajectory[idx][agent_id].states.append(obs_vectors_orig[act_idx + 1])
+                expert_trajectory[idx][agent_id].probs.append(prob[act_idx])
+                expert_trajectory[idx][agent_id].actions.append(act_n[agent_id])
                 act_idx += 1
             vec_act.append(act_n)
-        # time2 = time.time()
-        # print('obs vector extract:', time2 - time1)
-        probs.append(prob)
-        actions.append(acts)
-        # time1 = time.time()
         vec_obs, vec_rew, vec_done, vec_info = vector_env.step(vec_act)
-        # time2 = time.time()
-        # print('env interact:', time2 - time1)
-        # time1 = time.time()
         for idx, act_n in enumerate(vec_act):
             for agent_id in act_n.keys():
-                obs_vectors = obs_extractor(vec_obs[idx].get(agent_id))
-                next_states.append(obs_vectors.squeeze())
-                rewards.append(vec_rew[idx].get(agent_id))
-                dones.append(vec_done[idx].get(agent_id))
+                obs_vectors = obs_extractor(vec_obs[idx].get(agent_id)).squeeze()
+                expert_trajectory[idx][agent_id].next_states.append(obs_vectors)
+                expert_trajectory[idx][agent_id].rewards.append(vec_rew[idx].get(agent_id))
+                expert_trajectory[idx][agent_id].dones.append(vec_done[idx].get(agent_id))
                 counter += 1
-        # time2 = time.time()
-        # print('information gathering:', time2 - time1)
         if counter >= batch_size:
+            dump_all(expert_trajectory, batch_samples)
             break
-    return states, next_states, actions, probs, dones, rewards
+    return batch_samples.states, batch_samples.next_states, batch_samples.actions, batch_samples.probs, batch_samples.dones, batch_samples.rewards, total_agent_num
 
-# def sampling(psgail, sap_size=10000, env_num=12, agent_number=10):
+# def sampling(psgail, vector_env, batch_size):
+#     vector_env.seed(random.randint(1, 500))
+#     vec_obs = vector_env.reset()
+#     vec_done = []
+#     states = []
+#     actions = []
+#     rewards = []
+#     next_states = []
+#     probs = []
+#     dones = []
+#     counter = 0
+#     agents_buffer = {}
+#     for i in range(12):
+#         agents_buffer[i] = {}
+#     total_agent_num = 0
+#     while True:
+#         vec_act = []
+#         obs_vectors = np.zeros((1, 36))
+#         for idx, obs in enumerate(vec_obs):
+#             for agent_id in obs.keys():
+#                 if agent_id not in agents_buffer[idx]:
+#                     agents_buffer[idx][agent_id] = 1
+#                     total_agent_num += 1
+#                 if getlist(vec_done, idx) is not None and vec_done[idx].get(agent_id):
+#                     del agents_buffer[idx][agent_id]
+#                     continue
+#                 obs_vectors = np.vstack((obs_vectors, obs_extractor(obs[agent_id])))
+#                 states.append(obs_vectors[-1, :])
+#         obs_vectors = torch.tensor([obs_vectors[1:, :]], device=device1, dtype=torch.float32)
+#         prob, acts, _ = psgail.get_action(obs_vectors.squeeze())
+#         act_idx = 0
+#         prob = prob.to(device0)
+#         acts = acts.to(device0)
+#         # time1 = time.time()
+#         for idx, obs in enumerate(vec_obs):
+#             act_n = {}
+#             for agent_id in obs.keys():
+#                 if getlist(vec_done, idx) is not None and vec_done[idx].get(agent_id):
+#                     continue
+#                 act_tmp = acts[act_idx].cpu()
+#                 act_n[agent_id] = act_tmp.numpy()
+#                 act_idx += 1
+#             vec_act.append(act_n)
+#         # time2 = time.time()
+#         # print('obs vector extract:', time2 - time1)
+#         probs.append(prob)
+#         actions.append(acts)
+#         # time1 = time.time()
+#         vec_obs, vec_rew, vec_done, vec_info = vector_env.step(vec_act)
+#         # time2 = time.time()
+#         # print('env interact:', time2 - time1)
+#         # time1 = time.time()
+#         for idx, act_n in enumerate(vec_act):
+#             for agent_id in act_n.keys():
+#                 obs_vectors = obs_extractor(vec_obs[idx].get(agent_id))
+#                 next_states.append(obs_vectors.squeeze())
+#                 rewards.append(vec_rew[idx].get(agent_id))
+#                 dones.append(vec_done[idx].get(agent_id))
+#                 counter += 1
+#         # time2 = time.time()
+#         # print('information gathering:', time2 - time1)
+#         if counter >= batch_size:
+#             break
+#     return states, next_states, actions, probs, dones, rewards, total_agent_num
+
+
+# def evaluating(psgail, sap_size=10000, env_num=12, agent_number=10):
 #     env_creator = lambda: MATrafficSim(["./ngsim"], agent_number=agent_number)
 #     vector_env = ParallelEnv([env_creator] * env_num, auto_reset=True)
 #     vec_obs = vector_env.reset()
