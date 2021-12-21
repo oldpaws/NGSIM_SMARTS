@@ -1,6 +1,6 @@
 # How to run
 
-Step 0. Download the SMARTS submodule with `git submodule init & git submodule update`
+Step 0. Download the SMARTS submodule with `git submodule init & git submodule update`, **make sure your SMARTS is at the right commit id (46c3497)**
 
 Step 1. Install SMARTS following the instructions in `./SMARTS` folder
 
@@ -28,6 +28,17 @@ docker run -it -v $PWD:/src -p 8081:8081 --name <your_container_name> ngsim bash
 ```
 
 Then you can continue from Step 2 inside the docker container.
+
+
+# Benchmark your policy
+
+We provide a benchmark script for you to evaluate your model locally. Now the example script is just performing random actions policy, you can customize for your own policy models.
+
+You can run the script with the following command:
+
+```bash
+python benchmark/benchmark.py <path_to_your_ngsim_scenario> --env_num 10
+```
 
 <!-- 
 # Troubleshooting
