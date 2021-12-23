@@ -11,14 +11,15 @@ def get_observation_adapter(obs_stack_size):
 
     subscribed_features = dict(
         # distance_to_center=(stack_size, 1),
-        ego_pos=(stack_size, 2),
-        heading=(stack_size, 1),
-        speed=(stack_size, 1),
-        neighbor=(stack_size, closest_neighbor_num * 4),  # dist, speed, ttc
+        # ego_pos=(stack_size, 2),
+        # heading=(stack_size, 1),
+        # speed=(stack_size, 1),
+        neighbor=(stack_size, 76),  # dist, speed, ttc
         # heading_errors=(stack_size, look_ahead),
         # steering=(stack_size, 1),
         # ego_lane_dist_and_speed=(stack_size, observe_lane_num + 1),
         # img_gray=(stack_size, img_resolution, img_resolution) if use_rgb else False,
+        # distance=(stack_size, 1)
     )
 
     observation_space = gym.spaces.Dict(
@@ -31,6 +32,7 @@ def get_observation_adapter(obs_stack_size):
         observe_lane_num=observe_lane_num,
         resize=(img_resolution, img_resolution),
         closest_neighbor_num=closest_neighbor_num,
+
     )
 
     return observation_adapter

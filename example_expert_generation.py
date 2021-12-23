@@ -128,11 +128,12 @@ def main(scenario, obs_stack_size=1):
         cars = obs.keys()
         for car in cars:
             _obs = agent_spec.observation_adapter(obs[car])
+            obs_vec = _obs['neighbor'].squeeze()
             if cars_obs.__contains__(car):
-                cars_obs[car].append(_obs)
+                cars_obs[car].append(obs_vec)
                 cars_terminals[car].append(dones[car])
             else:
-                cars_obs[car] = [_obs]
+                cars_obs[car] = [obs_vec]
                 cars_terminals[car] = [dones[car]]
 
     for car in cars_obs:
@@ -150,8 +151,6 @@ def main(scenario, obs_stack_size=1):
             {
                 "observations": expert_obs,
                 "actions": expert_acts,
-                "next_observations": expert_obs_next,
-                "terminals": expert_terminals,
             },
             f,
         )

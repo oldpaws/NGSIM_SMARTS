@@ -50,7 +50,6 @@ SPACE_LIB = dict(
     #     low=-1e2, high=1e2, shape=shape
     # ),
     img_gray=lambda shape: gym.spaces.Box(low=0.0, high=1.0, shape=shape),
-
 )
 
 
@@ -77,13 +76,14 @@ def _get_closest_vehicles(ego, neighbor_vehicles, n):
     for v in neighbor_vehicles:
         v_pos = v.position[:2]
         rel_pos_vec = np.asarray([v_pos[0] - ego_pos[0], v_pos[1] - ego_pos[1]])
+        if abs(rel_pos_vec[0]) > 60 or abs(rel_pos_vec[1]) > 15:
+            continue
         # calculate its partitions
         angle = _cal_angle(rel_pos_vec)
         i = int(angle / partition_size)
         dist = np.sqrt(rel_pos_vec.dot(rel_pos_vec))
         if dist < groups[i][1]:
             groups[i] = (v, dist)
-
     return groups
 
 
@@ -154,27 +154,75 @@ class CalObs:
         neighbor_vehicle_states = env_obs.neighborhood_vehicle_states
         closest_neighbor_num = kwargs.get("closest_neighbor_num", 8)
         # dist, speed, ttc, pos
-        features = np.zeros((closest_neighbor_num, 4))
+        features = np.zeros((closest_neighbor_num, 7))
         # fill neighbor vehicles into closest_neighboor_num areas
         surrounding_vehicles = _get_closest_vehicles(
             ego, neighbor_vehicle_states, n=closest_neighbor_num
         )
+        husky = {'gnE05b_0': [-1.5708518823503947, -0.1, 180, 2.87],
+                 'gneE01': [-1.5708606520231623, -0.2, 310.92, 8.43, 3.69],
+                 'gneE51_0': [-1.5708418823503947, -0.1, 130.92, 3.50]}
+        husky_idx = {'gneE01': 1, 'gnE05b_0': 2, 'gneE51_0': 3, 'gneE05a_0': 4}
         ego_pos = ego.position[:2]
         ego_heading = np.asarray(float(ego.heading))
-        ego_speed = np.asarray(ego.speed)
+        iddx = 0
         for i, v in surrounding_vehicles.items():
             if v[0] is None:
-                v = ego
+                features[i, :] = np.asarray([0, 0, 0, 0, 0, 0, 0])
+                continue
             else:
                 v = v[0]
-
+            if husky_idx.get(v.lane_id) is not None:
+                iddx = husky_idx.get(v.lane_id)
+            elif v.lane_id[:6] in husky_idx:
+                iddx = husky_idx['gneE01']
             pos = v.position[:2]
             heading = np.asarray(float(v.heading))
             speed = np.asarray(v.speed)
+            rel0 = pos[0] - ego_pos[0]
+            rel1 = pos[1] - ego_pos[1]
+            if rel0 > 0:
+                rel_b0 = rel0 - v[2].length / 2
+            else:
+                rel_b0 = rel0 + v[2].length / 2
+            if rel1 > 0:
+                rel_b1 = rel1 - v[2].width / 2
+            else:
+                rel_b1 = rel1 + v[2].width / 2
+            features[i, :] = np.asarray([rel0, rel1, heading - ego_heading, speed, rel_b0, rel_b1, iddx])
+        features = features.reshape((-1,))
+        ego_pos = np.zeros(20)
+        ego_pos[:2] = ego.position[:2]
+        ego_pos[2] = ego.heading
+        ego_pos[3] = ego.speed
+        ego_pos[4:6] = ego.bounding_box.as_lwh[:2]
+        ego_pos[6:8] = ego.angular_velocity[:2]
+        ego_pos[8:10] = ego.angular_acceleration[:2]
+        ego_pos[10:12] = ego.linear_velocity[:2]
+        ego_pos[12:14] = ego.linear_acceleration[:2]
+        if husky_idx.get(ego.lane_id) is not None:
+            if husky_idx.get(ego.lane_id) == 4:
+                ego_pos[14:18] = np.array([1, 0, 0, 0])
+                ego_pos[18] = 0
+                ego_pos[19] = 0
+            elif husky_idx.get(ego.lane_id) == 2:
+                ego_pos[14:18] = np.array([0, 1, 0, 0])
+                ego_pos[18] = (ego.heading - husky['gnE05b_0'][0]) * 100
+                ego_pos[19] = ego.position[0] * husky['gnE05b_0'][1] / husky['gnE05b_0'][2] + husky['gnE05b_0'][
+                    3] - ego.position[1]
+            elif husky_idx.get(ego.lane_id) == 3:
+                ego_pos[14:18] = np.array([0, 0, 1, 0])
+                ego_pos[18] = (ego.heading - husky['gneE51_0'][0]) * 100
+                ego_pos[19] = (ego.position[0] - 180) * husky['gneE51_0'][1] / husky['gneE51_0'][2] + \
+                              husky['gneE51_0'][3] - ego.position[1]
+        elif ego.lane_id[:6] in husky_idx:
+            ego_pos[14:18] = np.array([0, 0, 0, 1])
+            ego_pos[18] = (ego.heading - husky['gneE01'][0]) * 100
+            ego_pos[19] = ego.position[0] * husky['gneE01'][1] / husky['gneE01'][2] + \
+                          husky['gneE01'][3] + ego.lane_index * husky['gneE01'][4] - ego.position[1]
+        vecs = np.concatenate((features, ego_pos), axis=0)
+        return vecs
 
-            features[i, :] = np.asarray([pos[0]-ego_pos[0], pos[1]-ego_pos[1], heading-ego_heading, speed-ego_speed])
-        return features.reshape((-1,))
-        # return None
     @staticmethod
     def cal_ego_lane_dist_and_speed(env_obs: Observation, **kwargs):
         """Calculate the distance from ego vehicle to its front vehicles (if have) at observed lanes,
