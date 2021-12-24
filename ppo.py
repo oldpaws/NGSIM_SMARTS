@@ -42,7 +42,6 @@ class NetAgent(torch.nn.Module):
         for i in range(layer_num - 1):
             layers.append(torch.nn.Linear(last_size, hidden_size[i]))
             layers.append(torch.nn.Tanh())
-            layers.append(torch.nn.Dropout(0.1))
             last_size = hidden_size[i]
         layers.append(torch.nn.Linear(last_size, output_size))
         self._net = torch.nn.Sequential(*layers)
@@ -55,9 +54,9 @@ class NetAgent(torch.nn.Module):
 
 class PSGAIL():
     def __init__(self,
-                 discriminator_lr=1e-4,
-                 policy_lr=6e-4,
-                 value_lr=3e-4,
+                 discriminator_lr=5e-5,
+                 policy_lr=1e-4,
+                 value_lr=5e-5,
                  hidden_size=[512, 256, 128, 64],
                  state_action_space=78,
                  state_space=76,
@@ -68,7 +67,7 @@ class PSGAIL():
         self.kl_target = 0.01
         self.beta = 0.5
         self.v_clip_range = 0.2
-        self.klmax = 0.15
+        self.klmax = 0.05
         self.discriminator = NetCritic(hidden_size, state_action_space, output_size=1, layer_num=5)
         self.dis_crit = nn.BCELoss()
         self.value = NetAgent(hidden_size, state_space, output_size=1, layer_num=5)
@@ -78,12 +77,12 @@ class PSGAIL():
         # self.policy =self.soft_update(self.target_policy, self.policy, 1)
         # self.policy = GRUNet(state_space, gru_hidden, gru_nums)
         self.discriminator_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=discriminator_lr,
-                                                        betas=(0.5, 0.999), weight_decay=0.001)
-        self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=policy_lr, weight_decay=0.001)
-        self.value_optimizer = torch.optim.Adam(self.value.parameters(), lr=value_lr, weight_decay=0.001)
-        self.scheduler_discriminator = torch.optim.lr_scheduler.StepLR(self.discriminator_optimizer,
-                                                                       step_size=2000,
-                                                                       gamma=0.95)
+                                                        betas=(0.5, 0.999))
+        self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=policy_lr)
+        self.value_optimizer = torch.optim.Adam(self.value.parameters(), lr=value_lr)
+        # self.scheduler_discriminator = torch.optim.lr_scheduler.StepLR(self.discriminator_optimizer,
+        #                                                                step_size=2000,
+        #                                                                gamma=0.95)
 
     def get_action(self, obs, action=None):
         policy_out = self.policy(obs)
@@ -100,8 +99,6 @@ class PSGAIL():
             log_prob1 = act1.log_prob(action1)
             log_prob2 = act2.log_prob(action2)
             log_prob = log_prob1 + log_prob2
-            action1 = torch.clamp(action1, -6, 6)
-            action2 = torch.clamp(action2, -0.6, 0.6)
             action = torch.cat((action1, action2), dim=1)
         else:
             log_prob1 = act1.log_prob(action[:, 0].unsqueeze(1))
@@ -131,7 +128,7 @@ class PSGAIL():
         self.discriminator_optimizer.zero_grad()
         discriminator_loss.backward()
         self.discriminator_optimizer.step()
-        self.scheduler_discriminator.step()
+        # self.scheduler_discriminator.step()
         return float(agents_score.mean().data), float(-torch.log(1 - D_expert).mean().data), float(discriminator_loss)
 
     def update_generator(self, batch):
@@ -149,16 +146,17 @@ class PSGAIL():
         ip_sp = torch.exp(log_prob - old_log_prob)
         ip_sp_clip = torch.clamp(ip_sp, 1 - self._clip_range, 1 + self._clip_range)
         cur_prob = torch.exp(log_prob)
-        kl_div = torch.nn.functional.kl_div(old_log_prob, cur_prob)
         policy_loss = -torch.mean(
             torch.min(ip_sp * adv.detach(), ip_sp_clip * adv.detach()))
+        # clip_v = old_v + torch.clamp(v - old_v, -self.v_clip_range, self.v_clip_range)
+        # v_max = torch.min(((v - td_target) ** 2), ((clip_v - td_target) ** 2))
+        value_loss = torch.mean(F.mse_loss(self.value(state), td_target.detach()))
+        kl_div = torch.nn.functional.kl_div(old_log_prob, cur_prob)
+        # if kl_div > self.klmax:
+        #     return float(policy_loss.data), float(value_loss.data), float(kl_div.data)
         self.policy_optimizer.zero_grad()
         policy_loss.backward()
         self.policy_optimizer.step()
-        v = self.value(state)
-        # clip_v = old_v + torch.clamp(v - old_v, -self.v_clip_range, self.v_clip_range)
-        # v_max = torch.min(((v - td_target) ** 2), ((clip_v - td_target) ** 2))
-        value_loss = torch.mean(F.mse_loss(v, td_target.detach()))
         self.value_optimizer.zero_grad()
         value_loss.backward()
         self.value_optimizer.step()

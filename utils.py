@@ -168,12 +168,14 @@ class CalObs:
         iddx = 0
         for i, v in surrounding_vehicles.items():
             if v[0] is None:
-                features[i, :] = np.asarray([0, 0, 0, 0, 0, 0, 0])
+                features[i, :] = np.array([0, 0, 0, 0, 0, 0, 0])
                 continue
             else:
                 v = v[0]
             if husky_idx.get(v.lane_id) is not None:
                 iddx = husky_idx.get(v.lane_id)
+            elif v.lane_id is None:
+                iddx = 0
             elif v.lane_id[:6] in husky_idx:
                 iddx = husky_idx['gneE01']
             pos = v.position[:2]

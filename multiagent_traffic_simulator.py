@@ -23,9 +23,9 @@ def get_action_adapter():
 class MATrafficSim:
     def __init__(self, scenarios, agent_number, obs_stacked_size=1):
         self.scenarios_iterator = Scenario.scenario_variations(scenarios, [])
-        self._init_scenario()
         self.obs_stacked_size = obs_stacked_size
         self.n_agents = agent_number
+        self._init_scenario()
         self.agentid_to_vehid = {}
         self.agent_ids = [f"agent_{i}" for i in range(self.n_agents)]
         self.agent_spec = AgentSpec(
@@ -115,7 +115,7 @@ class MATrafficSim:
             observations[k] = self.agent_spec.observation_adapter(
                 observations[k]
             )
-        self.vehicle_itr += self.n_agents
+        self.vehicle_itr = np.random.choice(len(self.vehicle_ids) - self.n_agents)
 
         return observations
 
@@ -135,7 +135,7 @@ class MATrafficSim:
         self.vehicle_ids = list(self.vehicle_missions.keys())
         for id in range(len(self.vehicle_ids)):
             self.vehicle_ids[id] = f"{vlist[id][0]}"
-        self.vehicle_itr = np.random.choice(len(self.vehicle_ids))
+        self.vehicle_itr = np.random.choice(len(self.vehicle_ids)-self.n_agents)
 
     def close(self):
         if self.smarts is not None:

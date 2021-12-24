@@ -77,9 +77,7 @@ class MATrafficSimOrig:
         if self.vehicle_itr + self.n_agents >= (len(self.vehicle_ids) - 1):
             self.vehicle_itr = 0
 
-        self.vehicle_id = self.vehicle_ids[
-            self.vehicle_itr : self.vehicle_itr + self.n_agents
-        ]
+        self.vehicle_id = self.vehicle_ids[self.vehicle_itr : self.vehicle_itr + self.n_agents]
 
         traffic_history_provider = self.smarts.get_provider_by_type(
             TrafficHistoryProvider

@@ -80,6 +80,7 @@ class trajectory():
         self.rewards = []
         self.dones = []
         self.probs = []
+        self.steps = 0
 
 
 class samples_agents():
@@ -92,35 +93,33 @@ class samples_agents():
         self.probs = []
 
 
-def dump_trajectory(expert_trajectory, agent_id, batch_samples):
+def dump_trajectory(expert_trajectory, agent_id, batch_samples, ends, counter, done_agents_steps, final_xs):
     batch_samples.states += expert_trajectory[agent_id].states
     batch_samples.probs += expert_trajectory[agent_id].probs
     batch_samples.actions += expert_trajectory[agent_id].actions
     batch_samples.next_states += expert_trajectory[agent_id].next_states
     batch_samples.rewards += expert_trajectory[agent_id].rewards
     batch_samples.dones += expert_trajectory[agent_id].dones
+    counter += len(expert_trajectory[agent_id].states)
+    done_agents_steps += (len(expert_trajectory[agent_id].states) + expert_trajectory[agent_id].steps)
     if expert_trajectory[agent_id].states[-1][56] > 300:
-        end = 1
-    else:
-        end = 0
-    return len(expert_trajectory[agent_id].states), end, expert_trajectory[agent_id].states[-1][56]
+        ends += 1
+    final_xs += expert_trajectory[agent_id].states[-1][56]
+    return ends, counter, done_agents_steps, final_xs
 
 
-def dump_all(expert_trajectory, agent_traj, total_agent_num, counter, ends, final_xs):
-    for expert_traject in expert_trajectory.values():
-        for agent_id in expert_traject.keys():
-            total_agent_num += 1
-            counter += len(expert_traject[agent_id].states)
-            agent_traj.states += expert_traject[agent_id].states
-            agent_traj.probs += expert_traject[agent_id].probs
-            agent_traj.actions += expert_traject[agent_id].actions
-            agent_traj.next_states += expert_traject[agent_id].next_states
-            agent_traj.rewards += expert_traject[agent_id].rewards
-            agent_traj.dones += expert_traject[agent_id].dones
-            if expert_traject[agent_id].states[-1][56] > 300:
-                ends += 1
-            final_xs += expert_traject[agent_id].states[-1][56]
-    return total_agent_num, counter, ends, final_xs
+def dump_all(expert_trajectory, agent_traj):
+    for env in expert_trajectory.keys():
+        for agent_id in expert_trajectory[env].keys():
+            agent_traj.states += expert_trajectory[env][agent_id].states
+            agent_traj.probs += expert_trajectory[env][agent_id].probs
+            agent_traj.actions += expert_trajectory[env][agent_id].actions
+            agent_traj.next_states += expert_trajectory[env][agent_id].next_states
+            agent_traj.rewards += expert_trajectory[env][agent_id].rewards
+            agent_traj.dones += expert_trajectory[env][agent_id].dones
+            steps = len(expert_trajectory[env][agent_id].states) + expert_trajectory[env][agent_id].steps
+            expert_trajectory[env][agent_id] = trajectory()
+            expert_trajectory[env][agent_id].steps = steps
 
 
 def trans2tensor(batch):
@@ -211,35 +210,22 @@ def cal_obs(env_obs, closest_neighbor_num):
     return vecs
 
 
-def sampling(psgail, vector_env, batch_size):
-    vector_env.seed(random.randint(1, 500))
-    vec_obs = vector_env.reset()
-    vec_done = []
-    expert_trajectory = {}
+def sampling(psgail, vector_env, batch_size, vec_obs, vec_done, expert_trajectory):
     total_agent_num = 0
-    for i in range(12):
-        expert_trajectory[i] = {}
     agent_traj = samples_agents()
     counter = 0
     ends = 0
     final_xs = 0
+    done_agents_steps = 0
     while True:
         vec_act = []
         obs_vectors_orig = np.zeros((1, 76))
         for idx, obs in enumerate(vec_obs):
             for agent_id in obs.keys():
-                if agent_id not in expert_trajectory[idx]:
-                    expert_trajectory[idx][agent_id] = trajectory()
-                elif getlist(vec_done, idx) is not None and vec_done[idx].get(agent_id):
-                    length, end, final_x = dump_trajectory(expert_trajectory[idx], agent_id, agent_traj)
-                    counter += length
-                    ends += end
-                    final_xs += final_x
-                    total_agent_num += 1
-                    del expert_trajectory[idx][agent_id]
-                    continue
-                # obs_vectors_orig = np.vstack((obs_vectors_orig, obs_extractor_new(obs[agent_id])))
-                obs_vectors_orig = np.vstack((obs_vectors_orig, obs[agent_id]['neighbor'].squeeze()))
+                if getlist(vec_done, idx) is None or not vec_done[idx].get(agent_id):
+                    if agent_id not in expert_trajectory[idx]:
+                        expert_trajectory[idx][agent_id] = trajectory()
+                    obs_vectors_orig = np.vstack((obs_vectors_orig, obs[agent_id]['neighbor'].squeeze()))
                 # im_show(obs[agent_id].top_down_rgb.data)
         obs_vectors = torch.tensor(obs_vectors_orig[1:, :], device=device1, dtype=torch.float32)
         acts, prob = psgail.get_action(obs_vectors)
@@ -249,31 +235,32 @@ def sampling(psgail, vector_env, batch_size):
         for idx, obs in enumerate(vec_obs):
             act_n = {}
             for agent_id in obs.keys():
-                if getlist(vec_done, idx) is not None and vec_done[idx].get(agent_id):
-                    continue
-                act_tmp = acts[act_idx].cpu()
-                act_n[agent_id] = act_tmp.numpy()
-                expert_trajectory[idx][agent_id].states.append(obs_vectors_orig[act_idx + 1])
-                expert_trajectory[idx][agent_id].probs.append(prob[act_idx])
-                expert_trajectory[idx][agent_id].actions.append(act_n[agent_id])
-                act_idx += 1
+                if getlist(vec_done, idx) is None or not vec_done[idx].get(agent_id):
+                    act_tmp = acts[act_idx].cpu()
+                    act_n[agent_id] = act_tmp.numpy()
+                    expert_trajectory[idx][agent_id].states.append(obs_vectors_orig[act_idx + 1])
+                    expert_trajectory[idx][agent_id].probs.append(prob[act_idx])
+                    expert_trajectory[idx][agent_id].actions.append(act_n[agent_id])
+                    act_idx += 1
             vec_act.append(act_n)
         vec_obs, vec_rew, vec_done, vec_info = vector_env.step(vec_act)
         for idx, act_n in enumerate(vec_act):
             for agent_id in act_n.keys():
                 # obs_vectors = obs_extractor_new(vec_obs[idx].get(agent_id)).squeeze()
-                if vec_obs[idx].get(agent_id) is None:
-                    expert_trajectory[idx][agent_id].next_states.append(np.zeros(76))
-                else:
-                    expert_trajectory[idx][agent_id].next_states.append(vec_obs[idx][agent_id]['neighbor'].squeeze())
                 expert_trajectory[idx][agent_id].rewards.append(vec_rew[idx].get(agent_id))
                 expert_trajectory[idx][agent_id].dones.append(vec_done[idx].get(agent_id))
+                if vec_done[idx].get(agent_id):
+                    expert_trajectory[idx][agent_id].next_states.append(np.zeros(76))
+                    ends, counter, done_agents_steps, final_xs = dump_trajectory(expert_trajectory[idx], agent_id, agent_traj,
+                                                                       ends, counter, done_agents_steps, final_xs)
+                    total_agent_num += 1
+                    del expert_trajectory[idx][agent_id]
+                else:
+                    expert_trajectory[idx][agent_id].next_states.append(vec_obs[idx][agent_id]['neighbor'].squeeze())
         if counter >= batch_size:
-            total_agent_num, counter, ends, final_xs = dump_all(expert_trajectory, agent_traj, total_agent_num, counter,
-                                                                ends, final_xs)
+            dump_all(expert_trajectory, agent_traj)
             break
-
-    return agent_traj.states, agent_traj.next_states, agent_traj.actions, agent_traj.probs, agent_traj.dones, agent_traj.rewards, total_agent_num, counter, ends, final_xs
+    return ends, total_agent_num, done_agents_steps, final_xs, agent_traj.states, agent_traj.next_states, agent_traj.actions, agent_traj.probs, agent_traj.dones, agent_traj.rewards, vec_obs, vec_done, expert_trajectory
 
 
 # def sampling(psgail, vector_env, batch_size):
